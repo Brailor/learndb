@@ -6,9 +6,13 @@ const KEY_INDEX = 0
 const VALUE_INDEX = 1
 const IS_DELETED_INDEX = 2
 
+const SST_FILE_NAME_REGEXP = /^sorted_string_table_(\d+)[.]json$/
+
 export class KeyValueStore {
-  constructor({ dbPath }) {
+  constructor({ dbPath, maxBufferLength }) {
     this.dbPath = dbPath
+    this.maxBufferLength = maxBufferLength
+    this.buffer = []
   }
 
   init() {
@@ -16,12 +20,25 @@ export class KeyValueStore {
   }
 
   set(key, value, isDeleted = false) {
-    // Creates the file if it does not exist, and appends a new line to the end
-    // containing the JSON for the entry.
-    fs.appendFileSync(
-      path.resolve(this.dbPath, 'store.json'),
-      JSON.stringify([key, value, isDeleted]) + '\n'
+    this.buffer.push([key, value, isDeleted])
+
+    console.log(`buffer length: ${this.buffer.length}`)
+    if (this.buffer.length < this.maxBufferLength) {
+      // The buffer isn't full yet, so we're done
+      return
+    }
+
+    const sstFileName = this._generateNextSstFileName()
+
+    // Flush the buffer to disk
+    fs.writeFileSync(
+      path.resolve(this.dbPath, sstFileName),
+      // Stringify the buffer entries, reverse sort them, and then join them
+      // into one string separated by newlines.  Still need a final trailing newline.
+      this.buffer.map(JSON.stringify).sort().reverse().join('\n') + '\n'
     )
+
+    this.buffer = []
   }
 
   get(key) {
@@ -62,5 +79,20 @@ export class KeyValueStore {
 
   delete(key) {
     this.set(key, null, true)
+  }
+
+  _generateNextSstFileName() {
+    const existingSstFileNames = shell.ls(this.dbPath)
+      .filter(fileName => SST_FILE_NAME_REGEXP.test(fileName))
+
+    if (existingSstFileNames.length === 0) {
+      return `sorted_string_table_1.json`
+    }
+
+    const lastSstFileName = existingSstFileNames.pop()
+    const lastSstIndexString = SST_FILE_NAME_REGEXP.exec(lastSstFileName)[1]
+    const lastSstIndex = parseInt(lastSstIndexString)
+    const nextSstFileName = `sorted_string_table_${lastSstIndex + 1}.json`
+    return nextSstFileName
   }
 }
